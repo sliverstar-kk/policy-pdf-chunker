@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import List
 
+from data_clean.chunkers.table_splitter import split_markdown_table
 from data_clean.config import ChunkingConfig
 from data_clean.models import Chunk, ChunkType, DocumentElement, ElementType
 
@@ -93,16 +94,20 @@ def split_sections(sections: list, *, source_file: str, config: ChunkingConfig) 
                     )
                 )
             else:
-                chunks.append(
-                    Chunk(
-                        content=table_element.content,
-                        chunk_type=ChunkType.TABLE,
-                        heading_path=list(section.heading_path),
-                        page_range=section.page_range,
-                        source_file=source_file,
-                        metadata={"oversized": True},
+                for sub_table in split_markdown_table(table_element.content, config.table):
+                    metadata = {}
+                    if sub_table["table_group"] is not None:
+                        metadata["table_group"] = sub_table["table_group"]
+                    chunks.append(
+                        Chunk(
+                            content=sub_table["content"],
+                            chunk_type=ChunkType.TABLE,
+                            heading_path=list(section.heading_path),
+                            page_range=section.page_range,
+                            source_file=source_file,
+                            metadata=metadata,
+                        )
                     )
-                )
 
         if not text_elements:
             continue

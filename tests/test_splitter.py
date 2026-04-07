@@ -96,3 +96,40 @@ class TestSplitSections:
         sections[0].page_range = (7, 9)
         chunks = split_sections(sections, source_file="test.pdf", config=config)
         assert chunks[0].page_range == (7, 9)
+
+    def test_oversized_table_split_by_group_column(self):
+        config = ChunkingConfig(max_chunk_size=800, min_chunk_size=200)
+        config.table.max_table_chunk_size = 50
+        config.table.group_column = 0
+        table_content = (
+            "| 地区 | 医院 |\n|---|---|\n"
+            "| 华东 | A医院 |\n| 华东 | B医院 |\n"
+            "| 华南 | C医院 |\n| 华南 | D医院 |"
+        )
+        element = DocumentElement(
+            type=ElementType.TABLE, content=table_content, level=None, page_number=10
+        )
+        section = Section(heading_path=["附录"], elements=[element], page_range=(10, 12))
+        chunks = split_sections([section], source_file="test.pdf", config=config)
+        assert len(chunks) == 2
+        assert chunks[0].chunk_type == ChunkType.TABLE
+        assert chunks[0].metadata["table_group"] == "华东"
+        assert chunks[1].metadata["table_group"] == "华南"
+        assert chunks[0].heading_path == ["附录"]
+
+    def test_oversized_table_fallback_row_split(self):
+        config = ChunkingConfig()
+        config.table.max_table_chunk_size = 50
+        config.table.group_column = None
+        config.table.fallback_rows_per_chunk = 2
+        rows = "\n".join(f"| 行{i} | 数据{i} |" for i in range(6))
+        table_content = f"| 名称 | 数据 |\n|---|---|\n{rows}"
+        element = DocumentElement(
+            type=ElementType.TABLE, content=table_content, level=None, page_number=1
+        )
+        section = Section(heading_path=["表格"], elements=[element], page_range=(1, 3))
+        chunks = split_sections([section], source_file="test.pdf", config=config)
+        assert len(chunks) == 3
+        for chunk in chunks:
+            assert chunk.chunk_type == ChunkType.TABLE
+            assert chunk.heading_path == ["表格"]
