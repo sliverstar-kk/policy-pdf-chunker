@@ -90,12 +90,8 @@ class TestAPIUploadAndPoll:
             {
                 "code": 0,
                 "data": {
-                    "file_urls": [
-                        {
-                            "url": "https://upload.example.com/signed",
-                            "object_name": "obj123",
-                        }
-                    ]
+                    "batch_id": "batch-abc-123",
+                    "file_urls": ["https://upload.example.com/signed"],
                 },
             }
         ).encode()
@@ -107,19 +103,15 @@ class TestAPIUploadAndPoll:
         put_resp.__enter__ = lambda s: s
         put_resp.__exit__ = MagicMock(return_value=False)
 
-        extract_resp = MagicMock()
-        extract_resp.read.return_value = json.dumps(
-            {"code": 0, "data": {"task_id": "task-abc-123"}}
-        ).encode()
-        extract_resp.__enter__ = lambda s: s
-        extract_resp.__exit__ = MagicMock(return_value=False)
-
-        mock_urlopen.side_effect = [batch_resp, put_resp, extract_resp]
+        mock_urlopen.side_effect = [batch_resp, put_resp]
 
         with patch("builtins.open", mock_open(read_data=b"fake-pdf-bytes")):
             task_id = parser._submit_file(Path("test.pdf"))
 
-        assert task_id == "task-abc-123"
+        assert task_id == "batch-abc-123"
+        request_body = json.loads(mock_request_cls.call_args_list[0].kwargs["data"].decode())
+        assert request_body["files"][0]["name"] == "test.pdf"
+        assert request_body["files"][0]["is_ocr"] is True
 
     @patch("data_clean.parsers.mineru_api_parser.urllib.request.urlopen")
     @patch("data_clean.parsers.mineru_api_parser.urllib.request.Request")
@@ -138,8 +130,10 @@ class TestAPIUploadAndPoll:
             {
                 "code": 0,
                 "data": {
-                    "state": "done",
-                    "full_zip_url": "https://cdn.example.com/result.zip",
+                    "extract_result": {
+                        "state": "done",
+                        "full_zip_url": "https://cdn.example.com/result.zip",
+                    }
                 },
             }
         ).encode()
@@ -148,7 +142,7 @@ class TestAPIUploadAndPoll:
 
         mock_urlopen.side_effect = [running_resp, done_resp]
 
-        result = parser._poll_task("task-abc-123")
+        result = parser._poll_task("batch-abc-123")
         assert result == "https://cdn.example.com/result.zip"
 
     @patch("data_clean.parsers.mineru_api_parser.urllib.request.urlopen")
@@ -158,7 +152,12 @@ class TestAPIUploadAndPoll:
 
         failed_resp = MagicMock()
         failed_resp.read.return_value = json.dumps(
-            {"code": 0, "data": {"state": "failed", "err_msg": "parse error"}}
+            {
+                "code": 0,
+                "data": {
+                    "extract_result": {"state": "failed", "err_msg": "parse error"}
+                },
+            }
         ).encode()
         failed_resp.__enter__ = lambda s: s
         failed_resp.__exit__ = MagicMock(return_value=False)
@@ -166,4 +165,4 @@ class TestAPIUploadAndPoll:
         mock_urlopen.side_effect = [failed_resp]
 
         with pytest.raises(MinerUAPIError, match="parse error"):
-            parser._poll_task("task-abc-123")
+            parser._poll_task("batch-abc-123")

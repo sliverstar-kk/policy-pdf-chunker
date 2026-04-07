@@ -118,8 +118,7 @@ def _markdown_to_elements(md: str) -> list[DocumentElement]:
 
 class MinerUAPIParser(PDFParser):
     API_BATCH_UPLOAD = "/api/v4/file-urls/batch"
-    API_EXTRACT_TASK = "/api/v4/extract/task"
-    API_TASK_STATUS = "/api/v4/extract/task/{task_id}"
+    API_BATCH_STATUS = "/api/v4/extract-results/batch/{batch_id}"
 
     def __init__(
         self,
@@ -157,11 +156,21 @@ class MinerUAPIParser(PDFParser):
         batch_data = self._api_request(
             "POST",
             self.API_BATCH_UPLOAD,
-            {"file_names": [pdf_path.name]},
+            {
+                "enable_formula": True,
+                "language": "ch",
+                "enable_table": True,
+                "files": [
+                    {
+                        "name": pdf_path.name,
+                        "is_ocr": True,
+                        "data_id": pdf_path.name,
+                    }
+                ],
+            },
         )
-        file_info = batch_data["file_urls"][0]
-        upload_url = file_info["url"]
-        object_name = file_info["object_name"]
+        batch_id = batch_data["batch_id"]
+        upload_url = batch_data["file_urls"][0]
 
         with open(pdf_path, "rb") as handle:
             file_bytes = handle.read()
@@ -174,30 +183,21 @@ class MinerUAPIParser(PDFParser):
         with urllib.request.urlopen(upload_request):
             pass
 
-        task_data = self._api_request(
-            "POST",
-            self.API_EXTRACT_TASK,
-            {
-                "url": object_name,
-                "is_ocr": True,
-                "enable_table": True,
-                "language": "ch",
-            },
-        )
-        return task_data["task_id"]
+        return batch_id
 
     def _poll_task(self, task_id: str) -> str:
         deadline = time.monotonic() + self.timeout
-        task_path = self.API_TASK_STATUS.format(task_id=task_id)
+        task_path = self.API_BATCH_STATUS.format(batch_id=task_id)
 
         while time.monotonic() < deadline:
             data = self._api_request("GET", task_path)
-            state = data.get("state", "")
+            extract_result = data.get("extract_result", {})
+            state = extract_result.get("state", data.get("state", ""))
             if state == "done":
-                return data["full_zip_url"]
+                return extract_result["full_zip_url"]
             if state == "failed":
                 raise MinerUAPIError(
-                    f"Task {task_id} failed: {data.get('err_msg', 'unknown')}"
+                    f"Task {task_id} failed: {extract_result.get('err_msg', 'unknown')}"
                 )
             time.sleep(self.poll_interval)
 
