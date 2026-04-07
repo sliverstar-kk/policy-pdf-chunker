@@ -17,6 +17,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("input", type=Path, help="PDF file or directory of PDFs")
     parser.add_argument("-o", "--output", type=Path, required=True, help="Output directory")
     parser.add_argument("--config", type=Path, default=None, help="YAML config file")
+    parser.add_argument(
+        "--parser",
+        choices=["api", "local"],
+        default="api",
+        help="Parser backend: 'api' for MinerU remote API (default), 'local' for local magic-pdf",
+    )
     return parser.parse_args(argv)
 
 
@@ -27,16 +33,25 @@ def main(argv: Optional[List[str]] = None) -> None:
     if args.config and args.config.exists():
         config = ChunkingConfig.from_yaml(args.config)
 
-    try:
-        from data_clean.parsers.mineru_parser import MinerUParser
+    if args.parser == "local":
+        try:
+            from data_clean.parsers.mineru_parser import MinerUParser
 
-        pdf_parser = MinerUParser()
-    except ImportError:
-        print(
-            "Warning: MinerU not available. Install magic-pdf to use.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+            pdf_parser = MinerUParser()
+        except ImportError:
+            print(
+                "Error: MinerU (magic-pdf) not installed. Use --parser api or install magic-pdf.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    else:
+        try:
+            from data_clean.parsers.mineru_api_parser import MinerUAPIParser
+
+            pdf_parser = MinerUAPIParser()
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
 
     pipeline = Pipeline(parser=pdf_parser, config=config)
     input_path = args.input
