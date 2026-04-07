@@ -53,6 +53,8 @@ class TestSplitSections:
         ]
         chunks = split_sections(sections, source_file="test.pdf", config=config)
         assert len(chunks) == 1
+        # Merged siblings should collapse to parent path, not keep first child's path
+        assert chunks[0].heading_path == ["父标题"]
 
     def test_short_sections_different_parent_not_merged(self):
         config = ChunkingConfig(max_chunk_size=800, min_chunk_size=200)

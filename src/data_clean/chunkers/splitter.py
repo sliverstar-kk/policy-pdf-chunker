@@ -62,7 +62,11 @@ def split_sections(sections: list, *, source_file: str, config: ChunkingConfig) 
 
         page_start = min(section.page_range[0] for section in merge_buffer)
         page_end = max(section.page_range[1] for section in merge_buffer)
-        heading_path = merge_buffer[0].heading_path
+        # When merging siblings, collapse to shared parent path
+        if len(merge_buffer) > 1:
+            heading_path = _parent_path(merge_buffer[0].heading_path)
+        else:
+            heading_path = merge_buffer[0].heading_path
         chunks.append(
             Chunk(
                 content=combined_text,
