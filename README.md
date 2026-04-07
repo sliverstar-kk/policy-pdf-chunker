@@ -2,6 +2,8 @@
 
 A rule-based PDF policy document chunking engine for RAG ingestion.
 
+[中文说明](./README.zh-CN.md)
+
 It parses policy PDFs into structured document elements, removes page noise, groups content by heading hierarchy, and emits text/table chunks with heading-path and page-range metadata.
 
 ## Features
