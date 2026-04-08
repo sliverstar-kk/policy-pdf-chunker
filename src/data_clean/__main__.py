@@ -8,6 +8,8 @@ from typing import List, Optional
 from data_clean.config import ChunkingConfig
 from data_clean.pipeline import Pipeline
 
+_SUPPORTED_EXTENSIONS = {".pdf", ".docx"}
+
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -24,6 +26,17 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Parser backend: 'api' for MinerU remote API (default), 'local' for local magic-pdf",
     )
     return parser.parse_args(argv)
+
+
+def _collect_input_files(input_path: Path) -> list[Path]:
+    if input_path.is_file():
+        return [input_path]
+    if input_path.is_dir():
+        files: list[Path] = []
+        for extension in sorted(_SUPPORTED_EXTENSIONS):
+            files.extend(input_path.glob(f"*{extension}"))
+        return sorted(files)
+    return []
 
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -58,12 +71,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     output_dir = args.output
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if input_path.is_file():
-        pdf_files = [input_path]
-    elif input_path.is_dir():
-        pdf_files = sorted(input_path.glob("*.pdf"))
-    else:
-        print(f"Error: {input_path} is not a file or directory", file=sys.stderr)
+    pdf_files = _collect_input_files(input_path)
+    if not pdf_files:
+        print(f"Error: no supported files found in {input_path}", file=sys.stderr)
         sys.exit(1)
 
     for pdf_file in pdf_files:

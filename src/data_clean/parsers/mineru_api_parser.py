@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import os
 import re
+import ssl
 import time
-import urllib.request
 import zipfile
 from pathlib import Path
 from typing import List
+from urllib.parse import urlparse
 
 from data_clean.models import DocumentElement, ElementType
 from data_clean.parsers.base import PDFParser
@@ -16,6 +18,10 @@ from data_clean.parsers.base import PDFParser
 _TITLE_RE = re.compile(r"^(#{1,6})\s+(.+)$")
 _TABLE_START_RE = re.compile(r"^\|.+\|$")
 _TABLE_SEP_RE = re.compile(r"^\|[\s\-:|]+\|$")
+_CONTENT_TYPES = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
 
 _LEVEL_PATTERNS = [
     (re.compile(r"^第[一二三四五六七八九十百千\d]+[章篇部]"), 1),
@@ -35,6 +41,10 @@ def _infer_title_level(text: str) -> int:
         if pattern.match(stripped):
             return level
     return 1
+
+
+def _content_type_for(path: Path) -> str:
+    return _CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
 
 
 def _markdown_to_elements(md: str) -> list[DocumentElement]:
@@ -143,14 +153,57 @@ class MinerUAPIParser(PDFParser):
             "Content-Type": "application/json",
         }
         body = json.dumps(data).encode() if data is not None else None
-        request = urllib.request.Request(
-            url, data=body, headers=headers, method=method
+        response_bytes = self._http_request_bytes(
+            url,
+            method=method,
+            body=body,
+            headers=headers,
         )
-        with urllib.request.urlopen(request) as response:
-            result = json.loads(response.read())
+        result = json.loads(response_bytes)
         if result.get("code") != 0:
             raise MinerUAPIError(f"API error: {result.get('msg', 'unknown')}")
         return result.get("data", {})
+
+    def _http_request_bytes(
+        self,
+        url: str,
+        *, #强制关键字参数，代表之后的变量都应该以关键字的格式去传
+        method: str = "GET",
+        body: bytes | None = None,#逻辑或，代表可以传入bytes也可以传空，默认为空
+        headers: dict | None = None,
+    ) -> bytes:
+        parsed = urlparse(url)
+        request_path = parsed.path or "/"
+        if parsed.query:
+            request_path = f"{request_path}?{parsed.query}"
+
+        connection_cls = (
+            http.client.HTTPSConnection
+            if parsed.scheme == "https"
+            else http.client.HTTPConnection
+        )
+
+        def _send(context=None):
+            kwargs = {}
+            if context is not None and parsed.scheme == "https":
+                kwargs["context"] = context
+            connection = connection_cls(parsed.netloc, **kwargs)
+            try:
+                connection.request(method, request_path, body=body, headers=headers or {})
+                response = connection.getresponse()
+                response_bytes = response.read()
+                status = response.status
+            finally:
+                connection.close()
+            if status >= 400:
+                raise MinerUAPIError(f"HTTP {status} for {url}")
+            return response_bytes
+
+        try:
+            return _send()
+        except ssl.SSLError:
+            insecure_context = ssl._create_unverified_context()
+            return _send(context=insecure_context)
 
     def _submit_file(self, pdf_path: Path) -> str:
         batch_data = self._api_request(
@@ -174,14 +227,24 @@ class MinerUAPIParser(PDFParser):
 
         with open(pdf_path, "rb") as handle:
             file_bytes = handle.read()
-        upload_request = urllib.request.Request(
-            upload_url,
-            data=file_bytes,
-            method="PUT",
-            headers={"Content-Type": "application/pdf"},
+
+        parsed = urlparse(upload_url)
+        upload_path = parsed.path
+        if parsed.query:
+            upload_path = f"{upload_path}?{parsed.query}"
+
+        connection = http.client.HTTPSConnection(parsed.netloc)
+        connection.request(
+            "PUT",
+            upload_path,
+            body=file_bytes,
+            headers={"Content-Type": _content_type_for(pdf_path)},
         )
-        with urllib.request.urlopen(upload_request):
-            pass
+        response = connection.getresponse()
+        response.read()
+        if response.status not in (200, 201):
+            raise MinerUAPIError(f"Upload failed with status {response.status}")
+        connection.close()
 
         return batch_id
 
@@ -192,6 +255,8 @@ class MinerUAPIParser(PDFParser):
         while time.monotonic() < deadline:
             data = self._api_request("GET", task_path)
             extract_result = data.get("extract_result", {})
+            if isinstance(extract_result, list):
+                extract_result = extract_result[0] if extract_result else {}
             state = extract_result.get("state", data.get("state", ""))
             if state == "done":
                 return extract_result["full_zip_url"]
@@ -204,9 +269,7 @@ class MinerUAPIParser(PDFParser):
         raise MinerUAPIError(f"Task {task_id} timed out after {self.timeout}s")
 
     def _download_markdown(self, zip_url: str) -> str:
-        request = urllib.request.Request(zip_url)
-        with urllib.request.urlopen(request) as response:
-            zip_bytes = response.read()
+        zip_bytes = self._http_request_bytes(zip_url)
 
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
             md_files = [name for name in archive.namelist() if name.endswith(".md")]
