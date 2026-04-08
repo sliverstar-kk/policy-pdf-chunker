@@ -233,20 +233,36 @@ class MinerUAPIParser(PDFParser):
         if parsed.query:
             upload_path = f"{upload_path}?{parsed.query}"
 
-        connection = http.client.HTTPSConnection(parsed.netloc)
-        connection.request(
-            "PUT",
+        content_type = _content_type_for(pdf_path)
+        status = self._upload_bytes(
+            parsed.netloc,
             upload_path,
-            body=file_bytes,
-            headers={"Content-Type": _content_type_for(pdf_path)},
+            file_bytes,
+            headers={"Content-Type": content_type},
         )
-        response = connection.getresponse()
-        response.read()
-        if response.status not in (200, 201):
-            raise MinerUAPIError(f"Upload failed with status {response.status}")
-        connection.close()
+        if status == 403:
+            status = self._upload_bytes(parsed.netloc, upload_path, file_bytes, headers={})
+        if status not in (200, 201):
+            raise MinerUAPIError(f"Upload failed with status {status}")
 
         return batch_id
+
+    def _upload_bytes(
+        self,
+        netloc: str,
+        upload_path: str,
+        file_bytes: bytes,
+        *,
+        headers: dict,
+    ) -> int:
+        connection = http.client.HTTPSConnection(netloc)
+        try:
+            connection.request("PUT", upload_path, body=file_bytes, headers=headers)
+            response = connection.getresponse()
+            response.read()
+            return response.status
+        finally:
+            connection.close()
 
     def _poll_task(self, task_id: str) -> str:
         deadline = time.monotonic() + self.timeout

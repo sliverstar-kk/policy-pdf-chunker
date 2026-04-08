@@ -177,6 +177,53 @@ class TestAPIUploadAndPoll:
         assert headers["Content-Type"] == "application/pdf"
 
     @patch("data_clean.parsers.mineru_api_parser.http.client.HTTPSConnection")
+    def test_upload_retries_without_content_type_after_403(self, mock_https_connection):
+        parser = self._make_parser()
+
+        batch_resp = MagicMock()
+        batch_resp.status = 200
+        batch_resp.read.return_value = json.dumps(
+            {
+                "code": 0,
+                "data": {
+                    "batch_id": "batch-abc-123",
+                    "file_urls": [
+                        "https://upload.example.com/object.pdf?OSSAccessKeyId=a&Signature=b"
+                    ],
+                },
+            }
+        ).encode()
+
+        forbidden_response = MagicMock()
+        forbidden_response.status = 403
+        forbidden_response.read.return_value = b""
+
+        success_response = MagicMock()
+        success_response.status = 200
+        success_response.read.return_value = b""
+
+        batch_connection = MagicMock()
+        batch_connection.getresponse.return_value = batch_resp
+        first_upload_connection = MagicMock()
+        first_upload_connection.getresponse.return_value = forbidden_response
+        second_upload_connection = MagicMock()
+        second_upload_connection.getresponse.return_value = success_response
+        mock_https_connection.side_effect = [
+            batch_connection,
+            first_upload_connection,
+            second_upload_connection,
+        ]
+
+        with patch("builtins.open", mock_open(read_data=b"fake-pdf-bytes")):
+            task_id = parser._submit_file(Path("test.pdf"))
+
+        assert task_id == "batch-abc-123"
+        first_headers = first_upload_connection.request.call_args.kwargs["headers"]
+        second_headers = second_upload_connection.request.call_args.kwargs["headers"]
+        assert first_headers["Content-Type"] == "application/pdf"
+        assert second_headers == {}
+
+    @patch("data_clean.parsers.mineru_api_parser.http.client.HTTPSConnection")
     def test_poll_until_done(self, mock_https_connection):
         parser = self._make_parser()
 
